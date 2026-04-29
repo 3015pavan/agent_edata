@@ -709,6 +709,8 @@ def _rule_based_intent(query: str) -> Optional[Dict[str, object]]:
         intent = "GET_TOTAL_STUDENTS"
     elif "how many students failed" in normalized or "count failed students" in normalized or "number of failures" in normalized:
         intent = "GET_FAILED_COUNT"
+    elif "pass percentage" in normalized or "percentage of students passed" in normalized or "percentage pass" in normalized or "how many percent passed" in normalized or ("pass" in normalized and "percentage" in normalized):
+        intent = "GET_PASS_PERCENTAGE"
     elif "list all subjects" in normalized or "show all subjects" in normalized or normalized in {"list subjects", "subjects list"} or ("all subjects" in normalized and "student" not in normalized):
         intent = "GET_ALL_SUBJECTS"
     elif "all students and their usns" in normalized or normalized == "show all students" or "list all student records" in normalized:

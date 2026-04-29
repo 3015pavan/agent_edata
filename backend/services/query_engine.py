@@ -113,6 +113,7 @@ INTENT_TO_QUERY_TYPE = {
     "GET_FAILED": "filter",
     "GET_FAILED_IN_SUBJECT": "filter",
     "GET_PASSED_IN_SUBJECT": "filter",
+    "GET_SGPA_RANGE": "filter",
     "GET_STUDENTS_WITH_GRADE": "filter",
     "GET_GRADE_BUT_FAILED": "filter",
     "GET_INCONSISTENT_PERFORMERS": "filter",
@@ -125,6 +126,7 @@ INTENT_TO_QUERY_TYPE = {
     "GET_MOST_FREQUENT_GRADE": "aggregation",
     "GET_AVERAGE_GP": "aggregation",
     "GET_ALL_SUBJECTS": "aggregation",
+    "GET_PASS_PERCENTAGE": "aggregation",
 }
 
 CACHEABLE_INTENTS = {"GET_TOPPER", "GET_AVERAGE_SGPA"}
@@ -994,6 +996,108 @@ def _extract_passing_subject(query: str) -> Optional[str]:
     return None
 
 
+def _is_sgpa_range_query(query: str) -> bool:
+    """Check if query is asking for students by SGPA range."""
+    lowered = query.lower()
+    markers = [
+        "sgpa above",
+        "sgpa below",
+        "sgpa between",
+        "sgpa greater than",
+        "sgpa less than",
+        "sgpa from",
+        "sgpa to",
+        "sgpa above",
+        "sgpa below",
+    ]
+    return any(marker in lowered for marker in markers)
+
+
+def _extract_sgpa_range(query: str) -> Optional[dict]:
+    """Extract SGPA range from query.
+    
+    Returns dict with min_sgpa and max_sgpa, or None if not found.
+    """
+    lowered = query.lower()
+    
+    # Pattern: "sgpa above X"
+    match = re.search(r"sgpa\s+(?:above|greater than|>)\s+([\d.]+)", lowered)
+    if match:
+        return {"min_sgpa": float(match.group(1)), "max_sgpa": 10.0}
+    
+    # Pattern: "sgpa below X"
+    match = re.search(r"sgpa\s+(?:below|less than|<)\s+([\d.]+)", lowered)
+    if match:
+        return {"min_sgpa": 0.0, "max_sgpa": float(match.group(1))}
+    
+    # Pattern: "sgpa between X and Y"
+    match = re.search(r"sgpa\s+between\s+([\d.]+)\s+and\s+([\d.]+)", lowered)
+    if match:
+        min_val = float(match.group(1))
+        max_val = float(match.group(2))
+        return {"min_sgpa": min(min_val, max_val), "max_sgpa": max(min_val, max_val)}
+    
+    # Pattern: "sgpa from X to Y"
+    match = re.search(r"sgpa\s+from\s+([\d.]+)\s+to\s+([\d.]+)", lowered)
+    if match:
+        min_val = float(match.group(1))
+        max_val = float(match.group(2))
+        return {"min_sgpa": min(min_val, max_val), "max_sgpa": max(min_val, max_val)}
+    
+    return None
+
+
+def _is_multi_intent_query(query: str) -> bool:
+    """Check if query contains multiple intents joined by 'and'."""
+    lowered = query.lower()
+    # Look for " and " pattern that separates different queries
+    and_patterns = [
+        r"\band\b",  # word boundary "and"
+    ]
+    count = 0
+    for pattern in and_patterns:
+        count += len(re.findall(pattern, lowered))
+    return count >= 1
+
+
+def _split_multi_intent_query(query: str) -> Optional[List[str]]:
+    """Split multi-intent query by 'and' conjunctions."""
+    # Use regex to split by " and " (case-insensitive)
+    parts = re.split(r'\s+and\s+', query.lower())
+    
+    if len(parts) < 2:
+        return None
+    
+    # Clean and validate parts
+    queries = []
+    for part in parts:
+        part = part.strip()
+        if len(part) > 3:  # Ignore very short fragments
+            queries.append(part)
+    
+    return queries if len(queries) >= 2 else None
+
+
+def _similarity_score(a: str, b: str) -> float:
+    """Calculate similarity between two strings (0-1)."""
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+
+def _correct_typo(word: str, keywords: List[str], threshold: float = 0.75) -> Optional[str]:
+    """Find best matching keyword for potentially misspelled word."""
+    best_match = None
+    best_score = 0
+    
+    for keyword in keywords:
+        score = _similarity_score(word, keyword)
+        if score > threshold and score > best_score:
+            best_match = keyword
+            best_score = score
+    
+    return best_match
+
+
 def _build_query_context(db: Session, query: str, history: Optional[Sequence[Dict[str, object]]] = None) -> Dict[str, object]:
     students = fetch_students(db)
     scored_students = sorted(
@@ -1358,6 +1462,46 @@ def _execute_filter(db: Session, intent: str, entities: Dict[str, object], confi
             meta={"query_type": "filter", "subject": best_match, "count": len(matched_students), "confidence": confidence},
         )
 
+    if intent == "GET_SGPA_RANGE":
+        min_sgpa = float(entities.get("min_sgpa") or 0.0)
+        max_sgpa = float(entities.get("max_sgpa") or 10.0)
+        
+        if min_sgpa < 0 or max_sgpa > 10 or min_sgpa > max_sgpa:
+            return _empty_response(
+                f"Invalid SGPA range: {min_sgpa}-{max_sgpa}. Valid range is 0-10.",
+                intent=intent,
+                meta={"query_type": "filter"},
+            )
+        
+        # Filter by SGPA range
+        filtered_students = [
+            student for student in students
+            if min_sgpa <= float(student.sgpa or 0.0) <= max_sgpa
+        ]
+        
+        if not filtered_students:
+            return _empty_response(
+                f"No students found with SGPA between {min_sgpa} and {max_sgpa}.",
+                intent=intent,
+                meta={"query_type": "filter", "min_sgpa": min_sgpa, "max_sgpa": max_sgpa},
+            )
+        
+        # Sort by SGPA (highest first)
+        filtered_students.sort(key=lambda s: float(s.sgpa or 0.0), reverse=True)
+        
+        return _student_response(
+            intent,
+            f"Found {len(filtered_students)} students with SGPA between {min_sgpa} and {max_sgpa}:",
+            filtered_students,
+            meta={
+                "query_type": "filter",
+                "min_sgpa": min_sgpa,
+                "max_sgpa": max_sgpa,
+                "count": len(filtered_students),
+                "confidence": confidence,
+            },
+        )
+
     if intent == "GET_STUDENTS_WITH_GRADE":
         grade = str(entities.get("grade") or "").strip().upper()
         if not grade:
@@ -1572,6 +1716,33 @@ def _execute_aggregation(db: Session, intent: str, entities: Dict[str, object], 
                 "query_type": "aggregation",
                 "subject_count": len(subjects),
                 "subjects": subjects,
+                "confidence": confidence,
+            },
+            "suggestions": [],
+        }
+
+    if intent == "GET_PASS_PERCENTAGE":
+        total_students = len(students)
+        if total_students == 0:
+            return _empty_response("No students in dataset.", intent=intent, meta={"query_type": "aggregation"})
+        
+        # Count students with no F grades (passed all subjects)
+        passed_students = sum(
+            1 for student in students
+            if not any((result.grade or "").upper() == "F" for result in student.results)
+        )
+        
+        pass_percentage = (passed_students / total_students) * 100 if total_students > 0 else 0.0
+        
+        return {
+            "intent": intent,
+            "answer": f"Pass percentage: {pass_percentage:.1f}% ({passed_students}/{total_students} students passed all subjects).",
+            "students": [],
+            "meta": {
+                "query_type": "aggregation",
+                "pass_percentage": round(pass_percentage, 2),
+                "passed_count": passed_students,
+                "total_count": total_students,
                 "confidence": confidence,
             },
             "suggestions": [],
@@ -1798,6 +1969,47 @@ def execute_query(db: Session, query: str, history: Optional[Sequence[Dict[str, 
             response_meta["cache_hit"] = False
             response["meta"] = response_meta
             return response
+
+    # Check for SGPA range queries EARLY
+    if _is_sgpa_range_query(query):
+        sgpa_range = _extract_sgpa_range(query)
+        if sgpa_range:
+            response = _execute_filter(db, "GET_SGPA_RANGE", sgpa_range, confidence=0.95)
+            response_meta = dict(response.get("meta", {}))
+            response_meta["planner"] = {"query_type": "filter", "intent": "GET_SGPA_RANGE"}
+            response_meta["cache_hit"] = False
+            response["meta"] = response_meta
+            return response
+
+    # Check for multi-intent queries (e.g., "X and Y")
+    if _is_multi_intent_query(query):
+        sub_queries = _split_multi_intent_query(query)
+        if sub_queries:
+            responses = []
+            for sub_query in sub_queries:
+                sub_response = execute_query(db, sub_query, history=history)
+                if sub_response:
+                    responses.append(sub_response)
+            
+            if responses:
+                # Combine results
+                combined_answer = "Multi-query results:\n"
+                all_students = []
+                for idx, resp in enumerate(responses, 1):
+                    combined_answer += f"\n{idx}. {resp.get('answer', '')}"
+                    all_students.extend(resp.get("students", []))
+                
+                return {
+                    "intent": "MULTI_INTENT_QUERY",
+                    "answer": combined_answer,
+                    "students": all_students,
+                    "meta": {
+                        "query_type": "multi_intent",
+                        "sub_query_count": len(sub_queries),
+                        "confidence": 0.95,
+                    },
+                    "suggestions": [],
+                }
 
     if _extract_contrast_subject_phrases(query):
         contextual_response = _execute_cross_subject_comparison_query(db, query) or _execute_contextual_answer(db, query, history=history)
