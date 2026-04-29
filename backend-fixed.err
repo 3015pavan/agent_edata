@@ -1,0 +1,40 @@
+C:\Users\Pavan\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\requests\__init__.py:113: RequestsDependencyWarning: urllib3 (2.3.0) or chardet (7.4.1)/charset_normalizer (3.4.1) doesn't match a supported version!
+  warnings.warn(
+INFO:     Started server process [93372]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")
+C:\Users\Pavan\PROJECTX\dataeag\backend\services\parser.py:74: FutureWarning: DataFrame.applymap has been deprecated. Use DataFrame.map instead.
+  cleaned_df = cleaned_df.applymap(lambda value: str(value).strip() if value is not None else "")

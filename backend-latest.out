@@ -1,0 +1,36 @@
+INFO:     127.0.0.1:59481 - "POST /upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59481 - "GET /analytics/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59631 - "GET /analytics/students HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59633 - "GET /analytics/students HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59632 - "GET /analytics/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59646 - "GET /analytics/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59647 - "GET /analytics/students HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59647 - "GET /analytics/students HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59646 - "GET /analytics/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59650 - "POST /upload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59650 - "GET /analytics/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59805 - "GET /analytics/students HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59650 - "GET /analytics/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59805 - "GET /analytics/students HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52800 - "GET /analytics/students HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52799 - "GET /analytics/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52800 - "GET /analytics/students HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52799 - "GET /analytics/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61959 - "GET /analytics/students HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61958 - "GET /analytics/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61958 - "GET /analytics/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61959 - "GET /analytics/students HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65214 - "GET /analytics/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65215 - "GET /analytics/students HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65215 - "GET /analytics/summary HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65214 - "GET /analytics/students HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63959 - "OPTIONS /analytics/query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63959 - "POST /analytics/query HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:63959 - "POST /analytics/query HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57880 - "OPTIONS /analytics/query HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57880 - "POST /analytics/query HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57880 - "POST /analytics/query HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57880 - "POST /analytics/query HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:64545 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64547 - "POST /analytics/query HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:64558 - "POST /analytics/query HTTP/1.1" 404 Not Found
