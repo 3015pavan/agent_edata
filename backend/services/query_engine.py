@@ -38,6 +38,7 @@ from .intelligence import (
 SUPPORTED_QUERY_HINTS = [
     "topper",
     "who failed",
+    "failed in engineering chemistry lab",
     "result of Abir",
     "students with A+",
     "students with A+ but failed in another subject",
@@ -108,6 +109,7 @@ INTENT_TO_QUERY_TYPE = {
     "GET_USN_PREFIX": "lookup",
     "GET_NAME_PREFIX": "lookup",
     "GET_FAILED": "filter",
+    "GET_FAILED_IN_SUBJECT": "filter",
     "GET_STUDENTS_WITH_GRADE": "filter",
     "GET_GRADE_BUT_FAILED": "filter",
     "GET_INCONSISTENT_PERFORMERS": "filter",
@@ -840,6 +842,41 @@ def _extract_contrast_subject_phrases(query: str) -> Optional[Tuple[str, str]]:
     return None
 
 
+def _is_failed_in_subject_query(query: str) -> bool:
+    """Check if query is asking for students who failed in a specific subject."""
+    lowered = query.lower()
+    markers = [
+        "failed in",
+        "failed in the",
+        "who failed in",
+        "students failed in",
+        "list.*failed in",
+        "find.*failed in",
+    ]
+    return any(marker in lowered for marker in markers)
+
+
+def _extract_failure_subject(query: str) -> Optional[str]:
+    """Extract the subject from a 'failed in [subject]' query."""
+    lowered = query.lower().strip()
+    # Pattern: "failed in [subject]" or similar variations
+    patterns = [
+        r"(?:failed|fail)\s+in\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)(?:\s+(?:subject|course|paper|exam)?)?[\?\.]?$",
+        r"(?:who\s+)?(?:students\s+)?(?:failed|fail)\s+(?:in\s+)?(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+        r"list.*(?:who\s+)?(?:failed|fail)\s+(?:in\s+)?(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+        r"find.*(?:who\s+)?(?:failed|fail)\s+(?:in\s+)?(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, lowered)
+        if match:
+            subject = re.sub(r"\s+", " ", match.group(1)).strip()
+            # Remove trailing words that are not part of subject name
+            subject = re.sub(r"\s+(subject|course|paper|exam|class|lab)$", "", subject)
+            if subject:
+                return subject
+    return None
+
+
 def _build_query_context(db: Session, query: str, history: Optional[Sequence[Dict[str, object]]] = None) -> Dict[str, object]:
     students = fetch_students(db)
     scored_students = sorted(
@@ -1061,6 +1098,78 @@ def _execute_filter(db: Session, intent: str, entities: Dict[str, object], confi
             f"Found {len(matched_students)} students with at least one failing grade.",
             matched_students,
             meta={"query_type": "filter", "count": len(matched_students), "confidence": confidence},
+        )
+
+    if intent == "GET_FAILED_IN_SUBJECT":
+        subject = str(entities.get("subject") or "").strip()
+        if not subject:
+            return _empty_response(
+                "Please specify a subject, for example 'students who failed in Engineering Chemistry Lab'.",
+                suggestions=["students who failed in engineering chemistry lab", "failed in design thinking"],
+                intent=intent,
+                meta={"query_type": "filter"},
+            )
+        
+        # Try to find matching subjects in the results
+        available_subjects = sorted({str(s).strip() for s in results_df["subject"].dropna() if str(s).strip()})
+        
+        # Normalize subject search
+        normalized_subject_query = _normalize_text(subject)
+        best_match = None
+        best_match_score = 0
+        
+        for available_subject in available_subjects:
+            normalized_available = _normalize_text(available_subject)
+            # Check for exact match or substring match
+            if normalized_available == normalized_subject_query:
+                best_match = available_subject
+                best_match_score = 100
+                break
+            # Check if query is contained in subject
+            if normalized_subject_query in normalized_available:
+                match_score = len(normalized_subject_query) * 10 / len(normalized_available)
+                if match_score > best_match_score:
+                    best_match = available_subject
+                    best_match_score = match_score
+            # Check if subject is contained in query
+            elif normalized_available in normalized_subject_query:
+                match_score = len(normalized_available) * 5
+                if match_score > best_match_score:
+                    best_match = available_subject
+                    best_match_score = match_score
+        
+        if not best_match:
+            suggestion_subjects = available_subjects[:5] if available_subjects else []
+            suggestions = [f"students who failed in {subj}" for subj in suggestion_subjects]
+            return _empty_response(
+                f"Subject '{subject}' not found in the dataset.",
+                suggestions=suggestions if suggestions else ["students who failed"],
+                intent=intent,
+                meta={"query_type": "filter", "available_subjects": available_subjects},
+            )
+        
+        # Filter by subject and grade F
+        filtered_df = results_df[
+            (results_df["subject"] == best_match) &
+            (results_df["grade"] == "F")
+        ]
+        matched_students = _students_from_dataframe(db, filtered_df.drop_duplicates("usn"))
+        
+        if not matched_students:
+            return _empty_response(
+                f"No students failed in '{best_match}'.",
+                intent=intent,
+                meta={"query_type": "filter", "subject": best_match, "confidence": confidence},
+            )
+        
+        # Sort by SGPA to show worst performers first
+        matched_students.sort(key=lambda s: float(s.sgpa), reverse=False)
+        
+        return _student_response(
+            intent,
+            f"Found {len(matched_students)} students who failed in {best_match}:",
+            matched_students,
+            meta={"query_type": "filter", "subject": best_match, "count": len(matched_students), "confidence": confidence},
         )
 
     if intent == "GET_STUDENTS_WITH_GRADE":
@@ -1481,6 +1590,17 @@ def execute_query(db: Session, query: str, history: Optional[Sequence[Dict[str, 
             "meta": {"query_type": "chat", "confidence": 1.0, "planner": {"query_type": "chat", "intent": "CHAT_GREETING"}, "cache_hit": False},
             "suggestions": ["topper", "result of Abir", "who failed", "Summarize this class"],
         }
+
+    # Check for subject-specific failure queries EARLY
+    if _is_failed_in_subject_query(query):
+        subject = _extract_failure_subject(query)
+        if subject:
+            response = _execute_filter(db, "GET_FAILED_IN_SUBJECT", {"subject": subject}, confidence=0.95)
+            response_meta = dict(response.get("meta", {}))
+            response_meta["planner"] = {"query_type": "filter", "intent": "GET_FAILED_IN_SUBJECT"}
+            response_meta["cache_hit"] = False
+            response["meta"] = response_meta
+            return response
 
     if _extract_contrast_subject_phrases(query):
         contextual_response = _execute_cross_subject_comparison_query(db, query) or _execute_contextual_answer(db, query, history=history)
