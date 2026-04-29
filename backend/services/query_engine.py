@@ -39,6 +39,8 @@ SUPPORTED_QUERY_HINTS = [
     "topper",
     "who failed",
     "failed in engineering chemistry lab",
+    "students with F in chemistry lab",
+    "who didn't pass design thinking",
     "result of Abir",
     "students with A+",
     "students with A+ but failed in another subject",
@@ -110,6 +112,7 @@ INTENT_TO_QUERY_TYPE = {
     "GET_NAME_PREFIX": "lookup",
     "GET_FAILED": "filter",
     "GET_FAILED_IN_SUBJECT": "filter",
+    "GET_PASSED_IN_SUBJECT": "filter",
     "GET_STUDENTS_WITH_GRADE": "filter",
     "GET_GRADE_BUT_FAILED": "filter",
     "GET_INCONSISTENT_PERFORMERS": "filter",
@@ -845,33 +848,147 @@ def _extract_contrast_subject_phrases(query: str) -> Optional[Tuple[str, str]]:
 def _is_failed_in_subject_query(query: str) -> bool:
     """Check if query is asking for students who failed in a specific subject."""
     lowered = query.lower()
-    markers = [
+    
+    # Failure markers with various phrasings
+    failure_markers = [
+        # Direct "failed in" patterns
         "failed in",
         "failed in the",
         "who failed in",
         "students failed in",
         "list.*failed in",
         "find.*failed in",
+        # "F" grade patterns
+        "got f in",
+        "with f in",
+        "got f grade",
+        "f grade in",
+        "students with f in",
+        # "GP 0" patterns
+        "gp 0 in",
+        "gp zero in",
+        "gp=0 in",
+        "zero gp in",
+        "students with gp 0",
+        # Natural language variations
+        "didn't pass",
+        "did not pass",
+        "didn't clear",
+        "did not clear",
+        "flunked",
+        "messed up",
+        "got back",
+        # "any subject" patterns
+        "any subject",
+        "all subjects",
+        "each subject",
     ]
-    return any(marker in lowered for marker in markers)
+    return any(marker in lowered for marker in failure_markers)
 
 
 def _extract_failure_subject(query: str) -> Optional[str]:
-    """Extract the subject from a 'failed in [subject]' query."""
+    """Extract the subject from a failure query.
+    
+    Handles patterns like:
+    - "failed in [subject]"
+    - "students with F in [subject]"
+    - "GP 0 in [subject]"
+    - "who didn't pass [subject]"
+    - "any subject" → returns None (handled by caller)
+    """
     lowered = query.lower().strip()
-    # Pattern: "failed in [subject]" or similar variations
+    
+    # Check for "any/all/each subject" patterns first
+    if re.search(r"\b(any|all|each)\s+subject", lowered):
+        return None  # Signal to use general filter
+    
+    # Comprehensive patterns for subject extraction
     patterns = [
-        r"(?:failed|fail)\s+in\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)(?:\s+(?:subject|course|paper|exam)?)?[\?\.]?$",
-        r"(?:who\s+)?(?:students\s+)?(?:failed|fail)\s+(?:in\s+)?(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
-        r"list.*(?:who\s+)?(?:failed|fail)\s+(?:in\s+)?(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
-        r"find.*(?:who\s+)?(?:failed|fail)\s+(?:in\s+)?(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+        # "failed in [subject]" and variants
+        r"(?:failed|fail)\s+in\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)(?:\s+(?:subject|course|paper|exam|class|lab))?[\?\.]?$",
+        # "F in [subject]" / "with F in [subject]"
+        r"(?:with\s+)?f\s+(?:grade\s+)?in\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+        r"(?:got\s+)?f\s+in\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+        r"f\s+grade\s+in\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+        # "GP 0 in [subject]"
+        r"gp\s+(?:=\s*)?0\s+in\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+        r"(?:zero\s+)?gp\s+in\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+        # "who/students/list with [condition] in [subject]"
+        r"(?:who\s+|students\s+|list\s+)?(?:students\s+)?(?:with\s+)?(?:f|gp\s+0)\s+(?:in|for)\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+        # "didn't pass/clear [subject]"
+        r"(?:didn't|did\s+not)\s+(?:pass|clear)\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+        # "flunked/messed up/got back in [subject]"
+        r"(?:flunked|messed\s+up|got\s+back)\s+(?:in\s+)?(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+        # "in [subject]" (for queries like "in chemistry lab")
+        r"\bin\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)(?:\s+subject)?[\?\.]?$",
     ]
+    
     for pattern in patterns:
         match = re.search(pattern, lowered)
         if match:
             subject = re.sub(r"\s+", " ", match.group(1)).strip()
-            # Remove trailing words that are not part of subject name
-            subject = re.sub(r"\s+(subject|course|paper|exam|class|lab)$", "", subject)
+            # Remove trailing keywords that are not part of subject name
+            subject = re.sub(r"\s+(?:subject|course|paper|exam|class|lab|list|results?)$", "", subject)
+            # Handle common abbreviations
+            if subject:
+                # Map abbreviations to full names (will be fuzzy matched later)
+                abbrev_map = {
+                    "chem lab": "chemistry lab",
+                    "chem": "chemistry",
+                    "engg": "engineering",
+                    "design thinking": "design thinking",
+                    "dt": "design thinking",
+                    "maths": "mathematics",
+                    "math": "mathematics",
+                }
+                for abbrev, full in abbrev_map.items():
+                    if subject.lower() == abbrev:
+                        return full
+                return subject
+    return None
+
+
+def _is_passing_in_subject_query(query: str) -> bool:
+    """Check if query is asking for students who PASSED in a specific subject."""
+    lowered = query.lower()
+    
+    pass_markers = [
+        "passed in",
+        "passed in the",
+        "who passed in",
+        "students passed in",
+        "didn't fail",
+        "did not fail",
+        "didn't get f",
+        "no f in",
+        "no failures in",
+        "with a in",
+        "got a in",
+        "with a+ in",
+        "got a+ in",
+        "highest in",
+        "scored highest in",
+    ]
+    return any(marker in lowered for marker in pass_markers)
+
+
+def _extract_passing_subject(query: str) -> Optional[str]:
+    """Extract subject from a 'passed in [subject]' query."""
+    lowered = query.lower().strip()
+    
+    patterns = [
+        r"passed?\s+in\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+        r"(?:with\s+)?a\+?\s+(?:in|for)\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+        r"(?:got|scored)\s+(?:highest|best)\s+in\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+        r"no\s+(?:f|failures)\s+in\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+        r"didn't\s+(?:fail|get\s+f)\s+(?:in\s+)?(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, lowered)
+        if match:
+            subject = re.sub(r"\s+", " ", match.group(1)).strip()
+            subject = re.sub(r"\s+(?:subject|course|paper|exam|class|lab)$", "", subject)
             if subject:
                 return subject
     return None
@@ -1168,6 +1285,75 @@ def _execute_filter(db: Session, intent: str, entities: Dict[str, object], confi
         return _student_response(
             intent,
             f"Found {len(matched_students)} students who failed in {best_match}:",
+            matched_students,
+            meta={"query_type": "filter", "subject": best_match, "count": len(matched_students), "confidence": confidence},
+        )
+
+    if intent == "GET_PASSED_IN_SUBJECT":
+        subject = str(entities.get("subject") or "").strip()
+        if not subject:
+            return _empty_response(
+                "Please specify a subject, for example 'students who passed in Engineering Chemistry Lab'.",
+                suggestions=["students who passed in engineering chemistry lab", "passed in design thinking"],
+                intent=intent,
+                meta={"query_type": "filter"},
+            )
+        
+        # Try to find matching subjects in the results
+        available_subjects = sorted({str(s).strip() for s in results_df["subject"].dropna() if str(s).strip()})
+        
+        # Normalize subject search
+        normalized_subject_query = _normalize_text(subject)
+        best_match = None
+        best_match_score = 0
+        
+        for available_subject in available_subjects:
+            normalized_available = _normalize_text(available_subject)
+            if normalized_available == normalized_subject_query:
+                best_match = available_subject
+                best_match_score = 100
+                break
+            if normalized_subject_query in normalized_available:
+                match_score = len(normalized_subject_query) * 10 / len(normalized_available)
+                if match_score > best_match_score:
+                    best_match = available_subject
+                    best_match_score = match_score
+            elif normalized_available in normalized_subject_query:
+                match_score = len(normalized_available) * 5
+                if match_score > best_match_score:
+                    best_match = available_subject
+                    best_match_score = match_score
+        
+        if not best_match:
+            suggestion_subjects = available_subjects[:5] if available_subjects else []
+            suggestions = [f"students who passed in {subj}" for subj in suggestion_subjects]
+            return _empty_response(
+                f"Subject '{subject}' not found in the dataset.",
+                suggestions=suggestions if suggestions else ["students who passed"],
+                intent=intent,
+                meta={"query_type": "filter", "available_subjects": available_subjects},
+            )
+        
+        # Filter by subject and NOT grade F
+        filtered_df = results_df[
+            (results_df["subject"] == best_match) &
+            (results_df["grade"] != "F")
+        ]
+        matched_students = _students_from_dataframe(db, filtered_df.drop_duplicates("usn"))
+        
+        if not matched_students:
+            return _empty_response(
+                f"No students passed in '{best_match}'.",
+                intent=intent,
+                meta={"query_type": "filter", "subject": best_match, "confidence": confidence},
+            )
+        
+        # Sort by SGPA to show top performers first
+        matched_students.sort(key=lambda s: float(s.sgpa), reverse=True)
+        
+        return _student_response(
+            intent,
+            f"Found {len(matched_students)} students who passed in {best_match}:",
             matched_students,
             meta={"query_type": "filter", "subject": best_match, "count": len(matched_students), "confidence": confidence},
         )
@@ -1598,6 +1784,17 @@ def execute_query(db: Session, query: str, history: Optional[Sequence[Dict[str, 
             response = _execute_filter(db, "GET_FAILED_IN_SUBJECT", {"subject": subject}, confidence=0.95)
             response_meta = dict(response.get("meta", {}))
             response_meta["planner"] = {"query_type": "filter", "intent": "GET_FAILED_IN_SUBJECT"}
+            response_meta["cache_hit"] = False
+            response["meta"] = response_meta
+            return response
+
+    # Check for subject-specific passing queries EARLY
+    if _is_passing_in_subject_query(query):
+        subject = _extract_passing_subject(query)
+        if subject:
+            response = _execute_filter(db, "GET_PASSED_IN_SUBJECT", {"subject": subject}, confidence=0.95)
+            response_meta = dict(response.get("meta", {}))
+            response_meta["planner"] = {"query_type": "filter", "intent": "GET_PASSED_IN_SUBJECT"}
             response_meta["cache_hit"] = False
             response["meta"] = response_meta
             return response
