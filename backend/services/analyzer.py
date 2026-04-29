@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
+import re
 
 import pandas as pd
 from sqlalchemy import delete, func, select
@@ -9,24 +10,72 @@ from .. import models
 from .parser import ParsedStudent
 
 
-def persist_students(db: Session, students: List[ParsedStudent]) -> None:
-    db.execute(delete(models.Result))
-    db.execute(delete(models.Student))
-    db.flush()
+def _get_or_create_dataset(db: Session, dataset_name: str) -> models.Dataset:
+    """Get existing dataset or create new one."""
+    stmt = select(models.Dataset).where(models.Dataset.name == dataset_name)
+    dataset = db.scalar(stmt)
+    if not dataset:
+        dataset = models.Dataset(name=dataset_name)
+        db.add(dataset)
+        db.flush()
+    return dataset
+
+
+def _extract_semester_from_filename(filename: str) -> int:
+    """Extract semester number from filename. Defaults to 1 if not found."""
+    # Try to find patterns like "sem1", "semester1", "s1", etc.
+    match = re.search(r'(?:sem|semester|s)(?:ester)?\s*(\d+)', filename.lower())
+    if match:
+        return int(match.group(1))
+    return 1
+
+
+def persist_students(db: Session, students: List[ParsedStudent], dataset_name: Optional[str] = None) -> None:
+    """
+    Persist students with multi-semester support.
+    
+    Args:
+        db: Database session
+        students: List of parsed students
+        dataset_name: Name of the dataset (file source). If None, uses "default"
+    """
+    if dataset_name is None:
+        dataset_name = "default"
+    
+    dataset = _get_or_create_dataset(db, dataset_name)
 
     for student in students:
-        db_student = models.Student(usn=student.usn, name=student.name, sgpa=student.sgpa)
-        db.add(db_student)
+        # Get or create student by USN
+        stmt = select(models.Student).where(models.Student.usn == student.usn)
+        db_student = db.scalar(stmt)
+        
+        if not db_student:
+            db_student = models.Student(usn=student.usn, name=student.name)
+            db.add(db_student)
+            db.flush()
+
+        # Create StudentSemester record
+        student_semester = models.StudentSemester(
+            student_id=db_student.id,
+            dataset_id=dataset.id,
+            semester=student.semester,
+            sgpa=student.sgpa,
+            cgpa=student.cgpa,
+        )
+        db.add(student_semester)
         db.flush()
+
+        # Create Result records
         for result in student.results:
             db.add(
                 models.Result(
-                    student_id=db_student.id,
+                    student_semester_id=student_semester.id,
                     subject=result["subject"],
                     grade=result["grade"],
                     gp=result["gp"],
                 )
             )
+    
     db.commit()
 
 
@@ -35,18 +84,41 @@ def save_processed_excel(processed_df: pd.DataFrame, output_path: Path) -> None:
     processed_df.to_excel(output_path, index=False)
 
 
-def fetch_students(db: Session) -> List[models.Student]:
-    stmt = select(models.Student).options(selectinload(models.Student.results)).order_by(models.Student.sgpa.desc())
-    return list(db.scalars(stmt).all())
+def fetch_students(db: Session, semester: Optional[int] = None, dataset_id: Optional[int] = None) -> List[models.Student]:
+    """Fetch students, optionally filtered by semester and/or dataset."""
+    stmt = select(models.Student).options(
+        selectinload(models.Student.student_semesters).selectinload(models.StudentSemester.results)
+    )
+    
+    students = list(db.scalars(stmt).all())
+    
+    # Filter by semester if specified
+    if semester or dataset_id:
+        filtered_students = []
+        for student in students:
+            semesters = student.student_semesters
+            if semester:
+                semesters = [s for s in semesters if s.semester == semester]
+            if dataset_id:
+                semesters = [s for s in semesters if s.dataset_id == dataset_id]
+            if semesters:
+                filtered_students.append(student)
+        students = filtered_students
+    
+    # Sort by latest CGPA
+    students.sort(key=lambda s: float(s.latest_cgpa or 0.0), reverse=True)
+    return students
 
 
-def fetch_students_by_usns(db: Session, usns: Sequence[str]) -> List[models.Student]:
+def fetch_students_by_usns(db: Session, usns: Sequence[str], semester: Optional[int] = None) -> List[models.Student]:
     if not usns:
         return []
     ordered_usns = [usn.upper() for usn in usns]
     stmt = (
         select(models.Student)
-        .options(selectinload(models.Student.results))
+        .options(
+            selectinload(models.Student.student_semesters).selectinload(models.StudentSemester.results)
+        )
         .where(models.Student.usn.in_(ordered_usns))
     )
     students = list(db.scalars(stmt).all())
@@ -60,37 +132,42 @@ def fetch_student_by_usn(db: Session, usn: str) -> Optional[models.Student]:
         return None
     stmt = (
         select(models.Student)
-        .options(selectinload(models.Student.results))
+        .options(
+            selectinload(models.Student.student_semesters).selectinload(models.StudentSemester.results)
+        )
         .where(models.Student.usn == normalized)
     )
     return db.scalar(stmt)
 
 
-def fetch_top_students(db: Session, limit: int) -> List[models.Student]:
-    stmt = (
-        select(models.Student)
-        .options(selectinload(models.Student.results))
-        .order_by(models.Student.sgpa.desc(), models.Student.name.asc())
-        .limit(limit)
-    )
-    return list(db.scalars(stmt).all())
+def fetch_top_students(db: Session, limit: int, semester: Optional[int] = None) -> List[models.Student]:
+    """Fetch top students by CGPA/SGPA, optionally filtered by semester."""
+    students = fetch_students(db, semester=semester)
+    return students[:limit]
 
 
-def fetch_topper(db: Session) -> Optional[models.Student]:
-    top_students = fetch_top_students(db, 1)
+def fetch_topper(db: Session, semester: Optional[int] = None) -> Optional[models.Student]:
+    """Get top student (topper) by CGPA, optionally for specific semester."""
+    top_students = fetch_top_students(db, 1, semester=semester)
     return top_students[0] if top_students else None
 
 
-def fetch_failed_students(db: Session, usns: Optional[Sequence[str]] = None) -> List[models.Student]:
+def fetch_failed_students(db: Session, usns: Optional[Sequence[str]] = None, semester: Optional[int] = None) -> List[models.Student]:
+    """Fetch students who failed (have grade F), optionally filtered by semester."""
     stmt = (
         select(models.Student)
-        .join(models.Result, models.Result.student_id == models.Student.id)
-        .options(selectinload(models.Student.results))
+        .join(models.StudentSemester, models.StudentSemester.student_id == models.Student.id)
+        .join(models.Result, models.Result.student_semester_id == models.StudentSemester.id)
+        .options(
+            selectinload(models.Student.student_semesters).selectinload(models.StudentSemester.results)
+        )
         .where(func.upper(models.Result.grade) == "F")
     )
     if usns:
         stmt = stmt.where(models.Student.usn.in_([usn.upper() for usn in usns]))
-    stmt = stmt.distinct().order_by(models.Student.sgpa.asc(), models.Student.name.asc())
+    if semester:
+        stmt = stmt.where(models.StudentSemester.semester == semester)
+    stmt = stmt.distinct().order_by(models.Student.name.asc())
     return list(db.scalars(stmt).all())
 
 
@@ -181,18 +258,40 @@ def build_summary(db: Session) -> Dict[str, object]:
 
 
 def serialize_student(student: models.Student) -> Dict[str, object]:
-    pass_fail = "FAIL" if any((result.grade or "").upper() == "F" for result in student.results) else "PASS"
-    return {
-        "usn": student.usn,
-        "name": student.name,
-        "sgpa": float(student.sgpa),
-        "pass_fail": pass_fail,
-        "results": [
+    """Serialize student data including all semesters."""
+    # Collect all results from all semesters
+    all_results = []
+    semesters_data = []
+    
+    for student_semester in sorted(student.student_semesters, key=lambda x: x.semester):
+        semester_results = [
             {
                 "subject": result.subject,
                 "grade": result.grade,
                 "gp": float(result.gp) if result.gp is not None else None,
+                "semester": student_semester.semester,
             }
-            for result in sorted(student.results, key=lambda item: item.subject.lower())
-        ],
+            for result in sorted(student_semester.results, key=lambda item: item.subject.lower())
+        ]
+        all_results.extend(semester_results)
+        
+        semesters_data.append({
+            "semester": student_semester.semester,
+            "sgpa": float(student_semester.sgpa),
+            "cgpa": float(student_semester.cgpa),
+            "dataset": student_semester.dataset.name if student_semester.dataset else "default",
+            "results": semester_results,
+        })
+    
+    # Check if failed in any semester
+    pass_fail = "FAIL" if any((result.get("grade") or "").upper() == "F" for result in all_results) else "PASS"
+    
+    return {
+        "usn": student.usn,
+        "name": student.name,
+        "latest_cgpa": float(student.latest_cgpa) if student.latest_cgpa else None,
+        "sgpa": float(student.sgpa),
+        "pass_fail": pass_fail,
+        "semesters": semesters_data,
+        "results": sorted(all_results, key=lambda item: (item.get("semester", 1), item["subject"].lower())),
     }

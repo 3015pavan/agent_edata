@@ -24,7 +24,9 @@ except ImportError:
 
 IDENTIFIER_KEYWORDS = {"usn", "reg", "register", "registration", "roll", "studentid", "student_id"}
 NAME_KEYWORDS = {"name", "studentname", "student_name", "candidate", "student"}
-SGPA_KEYWORDS = {"sgpa", "s.g.p.a", "semestergpa", "gpa"}
+SGPA_KEYWORDS = {"sgpa", "s.g.p.a", "semestergpa", "semester gpa"}
+CGPA_KEYWORDS = {"cgpa", "c.g.p.a", "cumulative", "cumgpa", "cumulative gpa"}
+SEMESTER_KEYWORDS = {"sem", "semester"}
 HEADER_IGNORE_TOKENS = {"slno", "sl", "usn", "name", "gr", "gp"}
 CONTROL_PATTERNS = [
     re.compile(r"^\d+:\d+:\d+:\d+$"),
@@ -45,6 +47,8 @@ class ParsedStudent:
     usn: str
     name: str
     sgpa: float
+    cgpa: float
+    semester: int
     pass_fail: str
     results: List[Dict[str, Optional[float]]]
 
@@ -234,13 +238,14 @@ def _parse_section(df: pd.DataFrame, header_idx: int, end_idx: int) -> List[Pars
         return []
 
     sgpa_col = _find_column_in_row(header_row, SGPA_KEYWORDS)
+    cgpa_col = _find_column_in_row(header_row, CGPA_KEYWORDS)
     grade_row_idx = _find_grade_marker_row(df, header_idx, end_idx)
 
     if grade_row_idx is not None:
-        return _parse_grade_section(df, header_idx, grade_row_idx, end_idx, usn_col, name_col, sgpa_col)
+        return _parse_grade_section(df, header_idx, grade_row_idx, end_idx, usn_col, name_col, sgpa_col, cgpa_col)
 
     if sgpa_col is not None:
-        return _parse_summary_section(df, header_idx, end_idx, usn_col, name_col, sgpa_col)
+        return _parse_summary_section(df, header_idx, end_idx, usn_col, name_col, sgpa_col, cgpa_col)
 
     return []
 
@@ -264,6 +269,7 @@ def _parse_grade_section(
     usn_col: int,
     name_col: int,
     sgpa_col: Optional[int],
+    cgpa_col: Optional[int] = None,
 ) -> List[ParsedStudent]:
     grade_row = [_sanitize_token(value) for value in df.iloc[grade_row_idx].tolist()]
     gr_columns = [idx for idx, token in enumerate(grade_row) if token == "gr" and idx > name_col]
@@ -315,12 +321,19 @@ def _parse_grade_section(
         sgpa = _as_float(row.iloc[sgpa_col]) if sgpa_col is not None and sgpa_col < len(row) else None
         if sgpa is None:
             sgpa = _compute_sgpa_from_weighted_points(weighted_points, credits_for_points)
+        
+        # Extract CGPA if available, otherwise use SGPA
+        cgpa = _as_float(row.iloc[cgpa_col]) if cgpa_col is not None and cgpa_col < len(row) else None
+        if cgpa is None:
+            cgpa = sgpa
 
         students.append(
             ParsedStudent(
                 usn=usn,
                 name=name,
                 sgpa=sgpa,
+                cgpa=cgpa,
+                semester=1,  # Will be overridden by upload route based on filename
                 pass_fail="FAIL" if has_fail else "PASS",
                 results=results,
             )
@@ -394,6 +407,7 @@ def _parse_summary_section(
     usn_col: int,
     name_col: int,
     sgpa_col: int,
+    cgpa_col: Optional[int] = None,
 ) -> List[ParsedStudent]:
     students: List[ParsedStudent] = []
     for row_idx in range(header_idx + 1, end_idx):
@@ -401,6 +415,12 @@ def _parse_summary_section(
         usn = _normalize_usn(row.iloc[usn_col] if usn_col < len(row) else "")
         name = _normalize_name(row.iloc[name_col] if name_col < len(row) else "")
         sgpa = _as_float(row.iloc[sgpa_col] if sgpa_col < len(row) else None)
+        cgpa = _as_float(row.iloc[cgpa_col] if cgpa_col is not None and cgpa_col < len(row) else None)
+        
+        # If CGPA not found in file, use SGPA as CGPA (fallback)
+        if cgpa is None:
+            cgpa = sgpa
+        
         if not usn or not name or sgpa is None:
             continue
 
@@ -409,6 +429,8 @@ def _parse_summary_section(
                 usn=usn,
                 name=name,
                 sgpa=sgpa,
+                cgpa=cgpa,
+                semester=1,  # Will be overridden by upload route based on filename
                 pass_fail="PASS",
                 results=[],
             )

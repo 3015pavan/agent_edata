@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..schemas import UploadResponse
-from ..services.analyzer import fetch_students, persist_students, save_processed_excel, serialize_student
+from ..services.analyzer import fetch_students, persist_students, save_processed_excel, serialize_student, _extract_semester_from_filename
 from ..services.elastic import get_elasticsearch_client, sync_students
 from ..services.intelligence import ensure_query_index
 from ..services.parser import parse_uploaded_file
@@ -23,7 +23,16 @@ async def upload_file(file: UploadFile = File(...), db: Session = Depends(get_db
     file_bytes = await file.read()
     try:
         parsed_students, processed_df = parse_uploaded_file(file_bytes, file.filename)
-        persist_students(db, parsed_students)
+        
+        # Extract semester from filename and set it on all parsed students
+        semester = _extract_semester_from_filename(file.filename)
+        for student in parsed_students:
+            student.semester = semester
+        
+        # Use filename (without extension) as dataset name
+        dataset_name = Path(file.filename).stem
+        
+        persist_students(db, parsed_students, dataset_name=dataset_name)
         save_processed_excel(processed_df, PROCESSED_FILE_PATH)
         students = fetch_students(db)
         elastic_client = get_elasticsearch_client()
