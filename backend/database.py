@@ -17,7 +17,7 @@ def _normalize_database_url(database_url: str) -> str:
 DATABASE_URL = _normalize_database_url(
     os.getenv(
         "DATABASE_URL",
-        "postgresql+psycopg2://postgres:postgres@localhost:5432/student_analytics",
+        "postgresql+psycopg2://postgres:postgres@localhost:5432/acadextract",
     )
 )
 DB_SCHEMA = os.getenv("DB_SCHEMA", "student_app")
