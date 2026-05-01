@@ -17,3 +17,4 @@ reportlab==4.4.0
 redis==5.2.1
 llama-parse==0.6.21
 llama-index-core==0.12.37
+apscheduler==3.10.4

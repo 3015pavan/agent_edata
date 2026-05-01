@@ -14,7 +14,9 @@ const starterPrompts = [
 ];
 
 function ResultTable({ students }) {
-  if (!students.length) {
+  const normalizedStudents = Array.isArray(students) ? students : [];
+
+  if (!normalizedStudents.length) {
     return null;
   }
 
@@ -31,11 +33,11 @@ function ResultTable({ students }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {students.map((student) => (
+            {normalizedStudents.map((student) => (
               <tr key={`chat-${student.usn}`}>
                 <td className="px-4 py-3 text-slate-700">{student.usn}</td>
                 <td className="px-4 py-3 text-slate-700">{student.name}</td>
-                <td className="px-4 py-3 text-slate-700">{student.sgpa.toFixed(2)}</td>
+                <td className="px-4 py-3 text-slate-700">{Number(student.sgpa).toFixed(2)}</td>
                 <td className="px-4 py-3">
                   <span
                     className={`rounded-full px-3 py-1 text-xs font-semibold ${
@@ -73,7 +75,7 @@ export default function QueryChat() {
       .slice(-8)
       .map((message) => ({
         role: message.role,
-        content: message.answer,
+        content: message.answer || "",
         student_usns: (message.students || []).map((student) => student.usn),
       }));
 
@@ -103,7 +105,16 @@ export default function QueryChat() {
 
     try {
       const response = await fetchQueryResponse(trimmed, history);
-      setMessages((current) => [...current, { role: "assistant", ...response.data }]);
+      setMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          answer: response.data.answer || "No answer was returned.",
+          students: Array.isArray(response.data.students) ? response.data.students : [],
+          meta: response.data.meta || {},
+          suggestions: Array.isArray(response.data.suggestions) ? response.data.suggestions : starterPrompts,
+        },
+      ]);
     } catch (error) {
       const message =
         error.response?.status === 404

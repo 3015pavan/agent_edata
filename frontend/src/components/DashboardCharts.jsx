@@ -1,11 +1,12 @@
 function DistributionBars({ title, items, colorClass }) {
-  const maxValue = Math.max(...items.map((item) => item.value), 1);
+  const normalizedItems = Array.isArray(items) ? items : [];
+  const maxValue = Math.max(...normalizedItems.map((item) => item.value), 1);
 
   return (
     <div className="rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-sm">
       <h3 className="text-lg font-semibold text-slate-900">{title}</h3>
       <div className="mt-5 space-y-3">
-        {items.map((item) => (
+        {normalizedItems.map((item) => (
           <div key={item.label}>
             <div className="mb-1 flex items-center justify-between text-sm text-slate-600">
               <span>{item.label}</span>
@@ -27,10 +28,13 @@ function DistributionBars({ title, items, colorClass }) {
 export default function DashboardCharts({ students }) {
   const gradeCounts = {};
   const passFailCounts = { PASS: 0, FAIL: 0 };
+  const normalizedStudents = Array.isArray(students) ? students : [];
 
-  students.forEach((student) => {
-    passFailCounts[student.pass_fail] = (passFailCounts[student.pass_fail] || 0) + 1;
-    student.results.forEach((result) => {
+  normalizedStudents.forEach((student) => {
+    const results = Array.isArray(student.results) ? student.results : [];
+    const status = student.pass_fail || "PASS";
+    passFailCounts[status] = (passFailCounts[status] || 0) + 1;
+    results.forEach((result) => {
       const grade = (result.grade || "NA").toUpperCase();
       gradeCounts[grade] = (gradeCounts[grade] || 0) + 1;
     });

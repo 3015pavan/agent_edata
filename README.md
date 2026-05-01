@@ -2,6 +2,8 @@
 
 Full-stack system for uploading student result files, normalizing them into PostgreSQL, indexing them into Elasticsearch, mapping natural-language queries to intents with FAISS, and answering them through a React chat interface.
 
+The codebase now also includes an autonomous email-driven agent that can poll unread result emails over IMAP, download `.xlsx` and `.pdf` attachments, push them through the existing ingestion pipeline, generate a PDF report, and reply with results over SMTP.
+
 ## Query Architecture
 
 The intelligent query path follows one strict rule set:
@@ -38,18 +40,29 @@ Supported examples:
 
 ```text
 backend/
+  agent_models.py
+  agent_schemas.py
   main.py
   database.py
   models.py
   schemas.py
+  agents/
+    email_agent.py
+  logs/
+    agent.log
   routes/
+    agent.py
     analytics.py
     upload.py
   services/
+    attachment_handler.py
     analyzer.py
     elastic.py
     intelligence.py
+    mail_reader.py
+    mail_sender.py
     parser.py
+    pipeline_runner.py
     query_engine.py
     reporting.py
 frontend/
@@ -81,6 +94,11 @@ Important variables:
 - `LLM_PROVIDER=bedrock` uses AWS Bedrock Claude for insight text
 - `REDIS_URL` enables query caching for repeated aggregation queries like topper and average SGPA
 - `GROQ_API_KEY`, `GROQ_BASE_URL`, `GROQ_MODEL`, and `GROQ_REASONING_EFFORT` configure Groq-hosted Qwen usage
+- `IMAP_HOST`, `IMAP_PORT`, `IMAP_MAILBOX`, `EMAIL_USER`, and `EMAIL_PASS` configure inbox polling
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USE_TLS`, and `SMTP_FROM` configure reply delivery
+- `AGENT_POLL_MINUTES` controls how often the background agent checks mail
+- `AGENT_AUTO_START=true` starts the scheduler automatically with the FastAPI app
+- `EMAIL_AGENT_MAX_ATTACHMENT_MB` caps attachment size before processing
 
 4. Install dependencies:
 
@@ -97,6 +115,23 @@ uvicorn backend.main:app --reload
 ```
 
 Backend runs on `http://localhost:8000`.
+
+### Email Agent Setup
+
+1. Use a mailbox that supports IMAP and SMTP.
+2. Set the email credentials in `.env`. For Gmail, use an app password rather than a normal password.
+3. Start the backend, then either:
+   - call `POST /agent/start`
+   - or set `AGENT_AUTO_START=true`
+4. Open the frontend admin page at `/agent` to start, stop, inspect status, run the agent manually, and review logs.
+
+Email flow:
+
+1. The agent reads unread emails whose subject contains `result`, `marks`, or `grade`
+2. It accepts only `.xlsx` and `.pdf` attachments
+3. Attachments are parsed through the existing parser, persisted with the existing SQLAlchemy pipeline, synchronized into Elasticsearch, and used to refresh the FAISS intent index
+4. Duplicate datasets are skipped through a stable hash over `USN + semester + SGPA + pass/fail`
+5. A PDF report and cleaned Excel file are attached to the SMTP reply
 
 ## Frontend Setup
 
@@ -166,6 +201,21 @@ Frontend runs on `http://localhost:5173`.
 - `GET /analytics/download/processed`
   - Downloads the processed Excel file
 
+- `POST /agent/start`
+  - Starts the APScheduler-based inbox polling job
+
+- `POST /agent/stop`
+  - Stops the polling job
+
+- `POST /agent/run-now`
+  - Triggers one immediate inbox processing run
+
+- `GET /agent/status`
+  - Returns running state, last run metadata, and counters
+
+- `GET /agent/logs`
+  - Returns recent entries from `backend/logs/agent.log`
+
 ## Notes
 
 - No query answers are hardcoded.
@@ -173,3 +223,4 @@ Frontend runs on `http://localhost:5173`.
 - Report insights fall back to deterministic summaries if Ollama or Bedrock Claude are not configured.
 - Report insights also support Groq-hosted Qwen models through the OpenAI-compatible `https://api.groq.com/openai/v1` endpoint.
 - Dashboard includes grade filters, SGPA range filters, grade distribution, and pass/fail ratio views.
+- The email agent uses real IMAP and SMTP flows only. Numerical summaries in replies and PDF reports are derived from pandas-backed computations over PostgreSQL data, not from the LLM.

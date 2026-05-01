@@ -1,17 +1,29 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import api from "../api";
 import DashboardCharts from "../components/DashboardCharts";
 import QueryChat from "../components/QueryChat";
 import StudentTable from "../components/StudentTable";
 import SummaryCard from "../components/SummaryCard";
 
+function formatSgpa(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue.toFixed(2) : "0.00";
+}
+
+function normalizeStudents(students) {
+  return Array.isArray(students) ? students : [];
+}
+
 function filterStudents(students, gradeFilter, sgpaRange) {
   const [minSgpa, maxSgpa] = sgpaRange;
   return students.filter((student) => {
+    const results = Array.isArray(student.results) ? student.results : [];
     const matchesGrade =
       gradeFilter === "ALL" ||
-      student.results.some((result) => (result.grade || "").toUpperCase() === gradeFilter);
-    const matchesSgpa = student.sgpa >= minSgpa && student.sgpa <= maxSgpa;
+      results.some((result) => (result.grade || "").toUpperCase() === gradeFilter);
+    const numericSgpa = Number(student.sgpa);
+    const matchesSgpa = Number.isFinite(numericSgpa) && numericSgpa >= minSgpa && numericSgpa <= maxSgpa;
     return matchesGrade && matchesSgpa;
   });
 }
@@ -24,6 +36,8 @@ export default function DashboardPage() {
   const [reportLoading, setReportLoading] = useState(false);
   const [gradeFilter, setGradeFilter] = useState("ALL");
   const [sgpaRange, setSgpaRange] = useState([0, 10]);
+  const location = useLocation();
+  const flashMessage = location.state?.flashMessage || "";
 
   useEffect(() => {
     const loadDashboard = async () => {
@@ -35,7 +49,7 @@ export default function DashboardPage() {
           api.get("/analytics/students"),
         ]);
         setSummary(summaryResponse.data);
-        setStudents(studentsResponse.data.students);
+        setStudents(normalizeStudents(studentsResponse.data.students));
       } catch (dashboardError) {
         setError(dashboardError.response?.data?.detail || "Unable to load dashboard data.");
       } finally {
@@ -73,13 +87,24 @@ export default function DashboardPage() {
     return <div className="rounded-3xl bg-rose-50 p-10 text-center text-rose-700 shadow-soft">{error}</div>;
   }
 
+  const safeSummary = summary || { topper: null, average_sgpa: 0, total_students: 0, failed_count: 0 };
   const allGrades = Array.from(
-    new Set(students.flatMap((student) => student.results.map((result) => (result.grade || "NA").toUpperCase()))),
+    new Set(
+      students.flatMap((student) =>
+        (Array.isArray(student.results) ? student.results : []).map((result) => (result.grade || "NA").toUpperCase()),
+      ),
+    ),
   ).sort((left, right) => left.localeCompare(right));
   const filteredStudents = filterStudents(students, gradeFilter, sgpaRange);
 
   return (
     <section className="space-y-6">
+      {flashMessage ? (
+        <div className="rounded-3xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-sm font-medium text-emerald-800 shadow-sm">
+          {flashMessage}
+        </div>
+      ) : null}
+
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">Dashboard</h2>
@@ -107,12 +132,12 @@ export default function DashboardPage() {
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
           title="Topper"
-          value={summary?.topper ? `${summary.topper.name}` : "N/A"}
-          subtitle={summary?.topper ? `${summary.topper.usn} | SGPA ${summary.topper.sgpa.toFixed(2)}` : "No data"}
+          value={safeSummary.topper ? `${safeSummary.topper.name}` : "N/A"}
+          subtitle={safeSummary.topper ? `${safeSummary.topper.usn} | SGPA ${formatSgpa(safeSummary.topper.sgpa)}` : "No data"}
         />
-        <SummaryCard title="Average SGPA" value={summary.average_sgpa.toFixed(2)} subtitle="Computed from PostgreSQL records" />
-        <SummaryCard title="Total Students" value={summary.total_students} subtitle="Current uploaded dataset" />
-        <SummaryCard title="Failed Count" value={summary.failed_count} subtitle="Students with at least one F grade" />
+        <SummaryCard title="Average SGPA" value={formatSgpa(safeSummary.average_sgpa)} subtitle="Computed from PostgreSQL records" />
+        <SummaryCard title="Total Students" value={safeSummary.total_students} subtitle="Current uploaded dataset" />
+        <SummaryCard title="Failed Count" value={safeSummary.failed_count} subtitle="Students with at least one F grade" />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">

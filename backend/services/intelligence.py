@@ -672,13 +672,41 @@ def _extract_limit(query: str) -> int:
     return 5
 
 
+def _extract_subject_phrase_intel(query: str):
+    lowered = re.sub(r"\s+", " ", query.lower().strip())
+    patterns = [
+        r"\b(?:got|gets|gotten|receive(?:d|s)?|earned|has|have)\s+(?:the\s+)?(?:a\+|a|b\+|b|c|p|f|o)\s+grade\s+in\s+(.+?)(?:\s+(?:only|just|please)\b|[\?\.!;,]|$)",
+        r"\b([a-z][a-z0-9\s&\-\+]+?)\s+(?:grade|grades|gp|grade point|score)\s+for\s+(.+?)(?:\s+(?:only|just|please)\b|[\?\.!;,]|$)",
+        r"\b(?:grade|grades|gp|grade point|score|subject)\s+(?:in|for|of)\s+(.+?)(?:\s+(?:only|just|please)\b|[\?\.!;,]|$)",
+        r"\bin\s+(?:the\s+|a\s+|an\s+)?(.+?)(?:\s+(?:only|just|please)\b|[\?\.!;,]|$)",
+        r"\bfor\s+(?:the\s+|a\s+|an\s+)?(.+?)(?:\s+(?:only|just|please)\b|[\?\.!;,]|$)",
+        r"\bsubject\s+(?:the\s+|a\s+|an\s+)?(.+?)(?:\s+(?:only|just|please)\b|[\?\.!;,]|$)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, lowered)
+        if match:
+            phrase = re.sub(r"\s+", " ", match.group(1)).strip()
+            phrase = re.sub(r"^(?:the|a|an|of|in)\s+", "", phrase)
+            phrase = re.sub(r"\s+(?:subject|course)\s*$", "", phrase)
+            if phrase:
+                return phrase
+    return None
+
+
 def parse_query_entities(query: str, intent: str) -> Dict[str, object]:
     if intent == "GET_RESULT_BY_NAME":
         return {"name": _extract_name_value(query)}
     if intent == "GET_RESULT_BY_USN":
         return {"usn": _extract_usn_value(query)}
     if intent == "GET_STUDENTS_WITH_GRADE":
-        return {"grade": _extract_grade_value(query)}
+        entities = {"grade": _extract_grade_value(query)}
+        subject_phrase = _extract_subject_phrase_intel(query)
+        if subject_phrase:
+            entities["subject"] = subject_phrase
+        return entities
+    if intent in {"GET_FAILED_IN_SUBJECT", "GET_PASSED_IN_SUBJECT"}:
+        subject_phrase = _extract_subject_phrase_intel(query)
+        return {"subject": subject_phrase} if subject_phrase else {}
     if intent == "GET_USN_PREFIX":
         return {"prefix": _extract_prefix(query, "usn")}
     if intent == "GET_NAME_PREFIX":
@@ -687,6 +715,25 @@ def parse_query_entities(query: str, intent: str) -> Dict[str, object]:
         return {"limit": _extract_limit(query)}
     if intent == "GET_GRADE_BUT_FAILED":
         return {"grade": _extract_grade_value(query) or "A+"}
+    if intent == "GET_SGPA_RANGE":
+        lowered = query.lower()
+        match = re.search(r"(?:sgpa|sgpa\s+of)\s*(?:above|greater than|more than|over|>=|at least|from|starting from|starting at|above)\s*([\d.]+)", lowered)
+        if not match:
+            match = re.search(r"(?:above|greater than|more than|over|at least)\s*([\d.]+)\s*(?:sgpa|gpa)?", lowered)
+        if match:
+            value = float(match.group(1))
+            return {"min_sgpa": value, "max_sgpa": 10.0}
+        match = re.search(r"(?:sgpa|sgpa\s+of)\s*(?:below|less than|under|<|at most)\s*([\d.]+)", lowered)
+        if not match:
+            match = re.search(r"(?:below|less than|under|at most)\s*([\d.]+)\s*(?:sgpa|gpa)?", lowered)
+        if match:
+            value = float(match.group(1))
+            return {"min_sgpa": 0.0, "max_sgpa": value}
+        match = re.search(r"(?:sgpa|sgpa\s+of)?\s*(?:between|from)\s*([\d.]+)\s*(?:and|to)\s*([\d.]+)", lowered)
+        if match:
+            left = float(match.group(1))
+            right = float(match.group(2))
+            return {"min_sgpa": min(left, right), "max_sgpa": max(left, right)}
     return {}
 
 
@@ -717,11 +764,13 @@ def _rule_based_intent(query: str) -> Optional[Dict[str, object]]:
         intent = "GET_ALL_STUDENTS"
     elif "all passing grades" in normalized or "students with no f" in normalized or "all pass students" in normalized:
         intent = "GET_ALL_PASSING"
+    elif re.search(r"\b(?:sgpa|gpa)\b", normalized) and re.search(r"\b(?:more than|greater than|above|over|at least|less than|below|under|between|from|to|>=|<=|>|<)\b", normalized):
+        intent = "GET_SGPA_RANGE"
     elif "gp = 0 but also" in normalized or "gp 0 but also" in normalized:
         intent = "GET_GP_ZERO_WITH_A"
     elif ("gp is 0" in normalized or "gp zero" in normalized or "students with gp 0" in normalized) and "also" not in normalized:
         intent = "GET_GP_ZERO_ANY"
-    elif "failed in another" in normalized and ("a+" in normalized or "a grade" in normalized or "grade a" in normalized):
+    elif ("failed in another" in normalized or "failed another" in normalized) and ("a+" in normalized or "a grade" in normalized or "grade a" in normalized):
         intent = "GET_GRADE_BUT_FAILED"
     elif "who failed" in normalized:
         intent = "GET_FAILED"
@@ -731,7 +780,14 @@ def _rule_based_intent(query: str) -> Optional[Dict[str, object]]:
         intent = "GET_NAME_PREFIX"
     elif _extract_usn_value(query) and "prefix" not in normalized and "starts with" not in normalized:
         intent = "GET_RESULT_BY_USN"
-    elif _extract_grade_value(query) and ("students with grade" in normalized or "students with " in normalized or "got f grade" in normalized or "grade a+" in normalized):
+    elif _extract_grade_value(query) and (
+        "students with grade" in normalized
+        or "students with " in normalized
+        or "got f grade" in normalized
+        or "got the" in normalized
+        or re.search(r"\bgot\s+(?:the\s+)?(?:a\+|a|b\+|b|c|p|f|o)\s+grade\b", normalized)
+        or re.search(r"\b(?:a\+|a|b\+|b|c|p|f|o)\s+grade\b", normalized)
+    ):
         intent = "GET_STUDENTS_WITH_GRADE"
     elif _extract_name_value(query):
         intent = "GET_RESULT_BY_NAME"

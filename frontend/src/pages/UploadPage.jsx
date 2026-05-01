@@ -28,8 +28,13 @@ export default function UploadPage() {
           "Content-Type": "multipart/form-data",
         },
       });
-      setMessage(`Processed ${response.data.total_students} students successfully.`);
-      navigate("/dashboard");
+      const successMessage = `Processed ${response.data.total_students} students successfully.`;
+      setMessage(successMessage);
+      navigate("/dashboard", {
+        state: {
+          flashMessage: successMessage,
+        },
+      });
     } catch (uploadError) {
       setError(uploadError.response?.data?.detail || "Upload failed.");
     } finally {

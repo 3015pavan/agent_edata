@@ -1,4 +1,5 @@
 import { NavLink, Route, Routes } from "react-router-dom";
+import AgentAdminPage from "./pages/AgentAdminPage";
 import DashboardPage from "./pages/DashboardPage";
 import UploadPage from "./pages/UploadPage";
 
@@ -36,6 +37,16 @@ export default function App() {
               >
                 Dashboard
               </NavLink>
+              <NavLink
+                to="/agent"
+                className={({ isActive }) =>
+                  `rounded-full px-4 py-2 text-sm font-medium transition ${
+                    isActive ? "bg-white text-brand-800" : "bg-white/10 text-white hover:bg-white/20"
+                  }`
+                }
+              >
+                Agent Admin
+              </NavLink>
             </nav>
           </div>
         </header>
@@ -44,6 +55,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<UploadPage />} />
             <Route path="/dashboard" element={<DashboardPage />} />
+            <Route path="/agent" element={<AgentAdminPage />} />
           </Routes>
         </main>
       </div>

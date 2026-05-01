@@ -24,9 +24,7 @@ except ImportError:
 
 IDENTIFIER_KEYWORDS = {"usn", "reg", "register", "registration", "roll", "studentid", "student_id"}
 NAME_KEYWORDS = {"name", "studentname", "student_name", "candidate", "student"}
-SGPA_KEYWORDS = {"sgpa", "s.g.p.a", "semestergpa", "semester gpa"}
-CGPA_KEYWORDS = {"cgpa", "c.g.p.a", "cumulative", "cumgpa", "cumulative gpa"}
-SEMESTER_KEYWORDS = {"sem", "semester"}
+SGPA_KEYWORDS = {"sgpa", "s.g.p.a", "semestergpa", "gpa"}
 HEADER_IGNORE_TOKENS = {"slno", "sl", "usn", "name", "gr", "gp"}
 CONTROL_PATTERNS = [
     re.compile(r"^\d+:\d+:\d+:\d+$"),
@@ -38,7 +36,7 @@ CONTROL_PATTERNS = [
     re.compile(r"^msramaiah", re.IGNORECASE),
     re.compile(r"^provisionalgradereport", re.IGNORECASE),
 ]
-USN_PATTERN = re.compile(r"^(?=.*[A-Z])(?=.*\d)[A-Z0-9][A-Z0-9-]{5,24}$")
+USN_PATTERN = re.compile(r"^(?=.*[A-Z])(?=.*\d)[A-Z0-9][A-Z0-9-]{2,24}$")
 LLAMA_PARSE_API_KEY = os.getenv("LLAMA_CLOUD_API_KEY") or os.getenv("LLAMA_PARSE_API_KEY")
 
 
@@ -46,15 +44,24 @@ LLAMA_PARSE_API_KEY = os.getenv("LLAMA_CLOUD_API_KEY") or os.getenv("LLAMA_PARSE
 class ParsedStudent:
     usn: str
     name: str
+    semester: int
     sgpa: float
     cgpa: float
-    semester: int
     pass_fail: str
     results: List[Dict[str, Optional[float]]]
 
 
+def _extract_semester_from_filename(filename: str) -> int:
+    """Extract semester number from the upload filename, defaulting to 1."""
+    match = re.search(r"(?:sem|semester|s)(?:ester)?\s*(\d+)", filename.lower())
+    if match:
+        return int(match.group(1))
+    return 1
+
+
 def parse_uploaded_file(file_bytes: bytes, filename: str) -> Tuple[List[ParsedStudent], pd.DataFrame]:
-    llama_students = _parse_with_llama(file_bytes, filename)
+    semester = _extract_semester_from_filename(filename)
+    llama_students = _parse_with_llama(file_bytes, filename, semester)
     if llama_students:
         deduplicated = _deduplicate_students(llama_students)
         processed_df = _students_to_dataframe(deduplicated)
@@ -79,7 +86,7 @@ def parse_uploaded_file(file_bytes: bytes, filename: str) -> Tuple[List[ParsedSt
 
     students: List[ParsedStudent] = []
     for raw_frame in frames:
-        students.extend(_normalize_frame(raw_frame))
+        students.extend(_normalize_frame(raw_frame, semester))
 
     if not students:
         raise ValueError("Could not detect student result rows from the uploaded file.")
@@ -89,7 +96,7 @@ def parse_uploaded_file(file_bytes: bytes, filename: str) -> Tuple[List[ParsedSt
     return deduplicated, processed_df
 
 
-def _parse_with_llama(file_bytes: bytes, filename: str) -> List[ParsedStudent]:
+def _parse_with_llama(file_bytes: bytes, filename: str, semester: int) -> List[ParsedStudent]:
     if not LLAMA_AVAILABLE or not LLAMA_PARSE_API_KEY:
         return []
 
@@ -117,7 +124,7 @@ def _parse_with_llama(file_bytes: bytes, filename: str) -> List[ParsedStudent]:
 
         students: List[ParsedStudent] = []
         for frame in frames:
-            students.extend(_normalize_frame(frame))
+            students.extend(_normalize_frame(frame, semester))
         return students
     except Exception:
         return []
@@ -198,7 +205,7 @@ def _extract_pdf_frames(file_bytes: bytes) -> List[pd.DataFrame]:
     return frames
 
 
-def _normalize_frame(raw_df: pd.DataFrame) -> List[ParsedStudent]:
+def _normalize_frame(raw_df: pd.DataFrame, semester: int) -> List[ParsedStudent]:
     cleaned_df = raw_df.copy().fillna("")
     cleaned_df = cleaned_df.apply(lambda column: column.map(_as_clean_text))
     cleaned_df = cleaned_df.loc[~(cleaned_df.eq("").all(axis=1))]
@@ -214,7 +221,7 @@ def _normalize_frame(raw_df: pd.DataFrame) -> List[ParsedStudent]:
     partial_students: List[ParsedStudent] = []
     for idx, header_idx in enumerate(header_indices):
         end_idx = header_indices[idx + 1] if idx + 1 < len(header_indices) else len(cleaned_df)
-        section_students = _parse_section(cleaned_df, header_idx, end_idx)
+        section_students = _parse_section(cleaned_df, header_idx, end_idx, semester)
         partial_students.extend(section_students)
 
     return partial_students
@@ -229,7 +236,7 @@ def _find_header_rows(df: pd.DataFrame) -> List[int]:
     return rows
 
 
-def _parse_section(df: pd.DataFrame, header_idx: int, end_idx: int) -> List[ParsedStudent]:
+def _parse_section(df: pd.DataFrame, header_idx: int, end_idx: int, semester: int) -> List[ParsedStudent]:
     header_row = df.iloc[header_idx].tolist()
     usn_col = _find_column_in_row(header_row, IDENTIFIER_KEYWORDS)
     name_col = _find_column_in_row(header_row, NAME_KEYWORDS)
@@ -238,14 +245,13 @@ def _parse_section(df: pd.DataFrame, header_idx: int, end_idx: int) -> List[Pars
         return []
 
     sgpa_col = _find_column_in_row(header_row, SGPA_KEYWORDS)
-    cgpa_col = _find_column_in_row(header_row, CGPA_KEYWORDS)
     grade_row_idx = _find_grade_marker_row(df, header_idx, end_idx)
 
     if grade_row_idx is not None:
-        return _parse_grade_section(df, header_idx, grade_row_idx, end_idx, usn_col, name_col, sgpa_col, cgpa_col)
+        return _parse_grade_section(df, header_idx, grade_row_idx, end_idx, usn_col, name_col, sgpa_col, semester)
 
     if sgpa_col is not None:
-        return _parse_summary_section(df, header_idx, end_idx, usn_col, name_col, sgpa_col, cgpa_col)
+        return _parse_summary_section(df, header_idx, end_idx, usn_col, name_col, sgpa_col, semester)
 
     return []
 
@@ -269,7 +275,7 @@ def _parse_grade_section(
     usn_col: int,
     name_col: int,
     sgpa_col: Optional[int],
-    cgpa_col: Optional[int] = None,
+    semester: int,
 ) -> List[ParsedStudent]:
     grade_row = [_sanitize_token(value) for value in df.iloc[grade_row_idx].tolist()]
     gr_columns = [idx for idx, token in enumerate(grade_row) if token == "gr" and idx > name_col]
@@ -321,19 +327,14 @@ def _parse_grade_section(
         sgpa = _as_float(row.iloc[sgpa_col]) if sgpa_col is not None and sgpa_col < len(row) else None
         if sgpa is None:
             sgpa = _compute_sgpa_from_weighted_points(weighted_points, credits_for_points)
-        
-        # Extract CGPA if available, otherwise use SGPA
-        cgpa = _as_float(row.iloc[cgpa_col]) if cgpa_col is not None and cgpa_col < len(row) else None
-        if cgpa is None:
-            cgpa = sgpa
 
         students.append(
             ParsedStudent(
                 usn=usn,
                 name=name,
+                semester=semester,
                 sgpa=sgpa,
-                cgpa=cgpa,
-                semester=1,  # Will be overridden by upload route based on filename
+                cgpa=sgpa,
                 pass_fail="FAIL" if has_fail else "PASS",
                 results=results,
             )
@@ -407,7 +408,7 @@ def _parse_summary_section(
     usn_col: int,
     name_col: int,
     sgpa_col: int,
-    cgpa_col: Optional[int] = None,
+    semester: int,
 ) -> List[ParsedStudent]:
     students: List[ParsedStudent] = []
     for row_idx in range(header_idx + 1, end_idx):
@@ -415,12 +416,6 @@ def _parse_summary_section(
         usn = _normalize_usn(row.iloc[usn_col] if usn_col < len(row) else "")
         name = _normalize_name(row.iloc[name_col] if name_col < len(row) else "")
         sgpa = _as_float(row.iloc[sgpa_col] if sgpa_col < len(row) else None)
-        cgpa = _as_float(row.iloc[cgpa_col] if cgpa_col is not None and cgpa_col < len(row) else None)
-        
-        # If CGPA not found in file, use SGPA as CGPA (fallback)
-        if cgpa is None:
-            cgpa = sgpa
-        
         if not usn or not name or sgpa is None:
             continue
 
@@ -428,9 +423,9 @@ def _parse_summary_section(
             ParsedStudent(
                 usn=usn,
                 name=name,
+                semester=semester,
                 sgpa=sgpa,
-                cgpa=cgpa,
-                semester=1,  # Will be overridden by upload route based on filename
+                cgpa=sgpa,
                 pass_fail="PASS",
                 results=[],
             )
@@ -494,7 +489,9 @@ def _deduplicate_students(students: Sequence[ParsedStudent]) -> List[ParsedStude
         merged[student.usn] = ParsedStudent(
             usn=student.usn,
             name=student.name or existing.name,
+            semester=student.semester if student.semester > 0 else existing.semester,
             sgpa=student.sgpa if student.sgpa > 0 else existing.sgpa,
+            cgpa=student.cgpa if student.cgpa > 0 else existing.cgpa,
             pass_fail="FAIL" if "FAIL" in {existing.pass_fail, student.pass_fail} else "PASS",
             results=list(results_by_subject.values()),
         )

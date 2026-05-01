@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import json
 import re
 from difflib import SequenceMatcher
@@ -190,6 +191,9 @@ def _has_student_reference(query: str) -> bool:
     if _extract_usn_value(query) or _extract_name_value(query):
         return True
     lowered = query.lower()
+    subject_phrase = _extract_subject_phrase(query)
+    if subject_phrase and any(marker in lowered for marker in ["grade", "grades", "gp", "grade point", "score", "marks", "sgpa"]):
+        return True
     return any(
         token in lowered
         for token in [" his ", " her ", " their ", " he ", " she ", " that student", " this student"]
@@ -328,9 +332,15 @@ def _normalize_scores(values: Dict[str, float]) -> Dict[str, float]:
 
 
 def _hybrid_lookup_by_name(db: Session, query: str, student_name: str, limit: int = 10) -> Dict[str, object]:
-    elastic_client = get_elasticsearch_client()
-    es_hits = search_students_by_name_ranked(elastic_client, student_name, limit=limit)
-    es_scores = _normalize_scores({hit["usn"]: float(hit["score"]) for hit in es_hits})
+    es_scores: Dict[str, float] = {}
+    try:
+        elastic_client = get_elasticsearch_client()
+        es_hits = search_students_by_name_ranked(elastic_client, student_name, limit=limit)
+        es_scores = _normalize_scores({hit["usn"]: float(hit.get("score") or 0.0) for hit in es_hits})
+    except Exception as exc:
+        # Elasticsearch may be down or unreachable; continue with FAISS/local fallbacks.
+        logging.warning("Elasticsearch lookup failed, falling back to FAISS/local search: %s", exc)
+        es_scores = {}
 
     faiss_scores: Dict[str, float] = {}
     try:
@@ -850,6 +860,8 @@ def _extract_contrast_subject_phrases(query: str) -> Optional[Tuple[str, str]]:
 def _is_failed_in_subject_query(query: str) -> bool:
     """Check if query is asking for students who failed in a specific subject."""
     lowered = query.lower()
+    if "failed in another subject" in lowered or "failed another subject" in lowered:
+        return False
     
     # Failure markers with various phrasings
     failure_markers = [
@@ -899,6 +911,7 @@ def _extract_failure_subject(query: str) -> Optional[str]:
     - "any subject" → returns None (handled by caller)
     """
     lowered = query.lower().strip()
+    lowered = re.sub(r"\s+\d+:\d+:\d+:\d+\s*$", "", lowered)
     
     # Check for "any/all/each subject" patterns first
     if re.search(r"\b(any|all|each)\s+subject", lowered):
@@ -931,6 +944,10 @@ def _extract_failure_subject(query: str) -> Optional[str]:
             subject = re.sub(r"\s+", " ", match.group(1)).strip()
             # Remove trailing keywords that are not part of subject name
             subject = re.sub(r"\s+(?:subject|course|paper|exam|class|lab|list|results?)$", "", subject)
+            if not subject or subject in {"another", "other", "any", "all", "every", "one", "some", "that", "this"}:
+                return None
+            if subject in {"another subject", "other subject"}:
+                return None
             # Handle common abbreviations
             if subject:
                 # Map abbreviations to full names (will be fuzzy matched later)
@@ -977,6 +994,7 @@ def _is_passing_in_subject_query(query: str) -> bool:
 def _extract_passing_subject(query: str) -> Optional[str]:
     """Extract subject from a 'passed in [subject]' query."""
     lowered = query.lower().strip()
+    lowered = re.sub(r"\s+\d+:\d+:\d+:\d+\s*$", "", lowered)
     
     patterns = [
         r"passed?\s+in\s+(?:the\s+)?([a-z][a-z0-9\s&\-\+]+?)[\?\.]?$",
@@ -1001,6 +1019,10 @@ def _is_sgpa_range_query(query: str) -> bool:
     lowered = query.lower()
     markers = [
         "sgpa above",
+        "sgpa more than",
+        "sgpa greater than",
+        "sgpa over",
+        "sgpa at least",
         "sgpa below",
         "sgpa between",
         "sgpa greater than",
@@ -1009,6 +1031,12 @@ def _is_sgpa_range_query(query: str) -> bool:
         "sgpa to",
         "sgpa above",
         "sgpa below",
+        "more than",
+        "greater than",
+        "over",
+        "at least",
+        "less than",
+        "below",
     ]
     return any(marker in lowered for marker in markers)
 
@@ -1021,17 +1049,21 @@ def _extract_sgpa_range(query: str) -> Optional[dict]:
     lowered = query.lower()
     
     # Pattern: "sgpa above X"
-    match = re.search(r"sgpa\s+(?:above|greater than|>)\s+([\d.]+)", lowered)
+    match = re.search(r"(?:sgpa\s+(?:above|greater than|more than|over|at least)|(?:more than|greater than|over|at least)\s+sgpa(?:\s+of)?|sgpa\s*>=|sgpa\s*>)\s*([\d.]+)", lowered)
+    if not match:
+        match = re.search(r"(?:above|greater than|more than|over|at least)\s*([\d.]+)\s*(?:sgpa|gpa)?", lowered)
     if match:
         return {"min_sgpa": float(match.group(1)), "max_sgpa": 10.0}
     
     # Pattern: "sgpa below X"
-    match = re.search(r"sgpa\s+(?:below|less than|<)\s+([\d.]+)", lowered)
+    match = re.search(r"(?:sgpa\s+(?:below|less than|under)|(?:less than|below|under)\s+sgpa(?:\s+of)?|sgpa\s*<=|sgpa\s*<)\s*([\d.]+)", lowered)
+    if not match:
+        match = re.search(r"(?:below|less than|under|at most)\s*([\d.]+)\s*(?:sgpa|gpa)?", lowered)
     if match:
         return {"min_sgpa": 0.0, "max_sgpa": float(match.group(1))}
     
     # Pattern: "sgpa between X and Y"
-    match = re.search(r"sgpa\s+between\s+([\d.]+)\s+and\s+([\d.]+)", lowered)
+    match = re.search(r"(?:sgpa\s+)?(?:between|from)\s+([\d.]+)\s+(?:and|to)\s+([\d.]+)", lowered)
     if match:
         min_val = float(match.group(1))
         max_val = float(match.group(2))
@@ -1504,6 +1536,9 @@ def _execute_filter(db: Session, intent: str, entities: Dict[str, object], confi
 
     if intent == "GET_STUDENTS_WITH_GRADE":
         grade = str(entities.get("grade") or "").strip().upper()
+        # Subject is extracted by intelligence module and passed in entities
+        subject = str(entities.get("subject") or "").strip()
+        
         if not grade:
             return _empty_response(
                 "Please specify a grade, for example 'students with A+'.",
@@ -1512,14 +1547,55 @@ def _execute_filter(db: Session, intent: str, entities: Dict[str, object], confi
                 meta={"query_type": "filter"},
             )
         filtered_df = results_df[results_df["grade"] == grade]
+        
+        # If subject is specified, apply subject filtering
+        best_match = None
+        if subject:
+            available_subjects = sorted({str(s).strip() for s in results_df["subject"].dropna() if str(s).strip()})
+            normalized_subject_query = _normalize_text(subject)
+            best_match_score = 0
+            
+            for available_subject in available_subjects:
+                normalized_available = _normalize_text(available_subject)
+                # Check for exact match
+                if normalized_available == normalized_subject_query:
+                    best_match = available_subject
+                    best_match_score = 100
+                    break
+                # Check if query is contained in subject
+                if normalized_subject_query in normalized_available:
+                    match_score = len(normalized_subject_query) * 10 / len(normalized_available)
+                    if match_score > best_match_score:
+                        best_match = available_subject
+                        best_match_score = match_score
+                # Check if subject is contained in query
+                elif normalized_available in normalized_subject_query:
+                    match_score = len(normalized_available) * 5
+                    if match_score > best_match_score:
+                        best_match = available_subject
+                        best_match_score = match_score
+            
+            if best_match:
+                filtered_df = filtered_df[filtered_df["subject"] == best_match]
+        
         matched_students = _students_from_dataframe(db, filtered_df.drop_duplicates("usn"))
         if not matched_students:
-            return _empty_response(f"No students were found with grade {grade}.", intent=intent, meta={"query_type": "filter"})
+            msg = f"No students were found with grade {grade}"
+            if subject:
+                msg += f" in {subject}"
+            msg += "."
+            return _empty_response(msg, intent=intent, meta={"query_type": "filter"})
+        
+        answer_text = f"Found {len(matched_students)} students with grade {grade}"
+        if subject and best_match:
+            answer_text += f" in {best_match}"
+        answer_text += "."
+        
         return _student_response(
             intent,
-            f"Found {len(matched_students)} students with grade {grade}.",
+            answer_text,
             matched_students,
-            meta={"query_type": "filter", "grade": grade, "confidence": confidence},
+            meta={"query_type": "filter", "grade": grade, "subject": best_match or subject, "confidence": confidence},
         )
 
     if intent == "GET_GRADE_BUT_FAILED":

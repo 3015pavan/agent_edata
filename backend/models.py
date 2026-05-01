@@ -1,6 +1,5 @@
-from sqlalchemy import Column, Float, ForeignKey, Integer, String, DateTime
+from sqlalchemy import Column, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import relationship
-from datetime import datetime
 
 from .database import Base
 
@@ -9,8 +8,7 @@ class Dataset(Base):
     __tablename__ = "datasets"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), nullable=False, unique=True, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    name = Column(String(255), unique=True, nullable=False, index=True)
 
     student_semesters = relationship(
         "StudentSemester",
@@ -26,6 +24,7 @@ class Student(Base):
     id = Column(Integer, primary_key=True, index=True)
     usn = Column(String(128), unique=True, nullable=False, index=True)
     name = Column(String(255), nullable=False)
+    sgpa = Column(Float, nullable=False)
 
     student_semesters = relationship(
         "StudentSemester",
@@ -33,31 +32,28 @@ class Student(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+    results = relationship(
+        "Result",
+        back_populates="student",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     @property
     def latest_cgpa(self):
-        """Get latest CGPA from most recent semester across all datasets."""
-        if self.student_semesters:
-            latest = sorted(self.student_semesters, key=lambda x: (x.semester, x.id), reverse=True)[0]
-            return latest.cgpa
-        return None
-
-    @property
-    def sgpa(self):
-        """Get SGPA from latest semester."""
-        if self.student_semesters:
-            latest = sorted(self.student_semesters, key=lambda x: (x.semester, x.id), reverse=True)[0]
-            return latest.sgpa
-        return 0.0
+        if not self.student_semesters:
+            return self.sgpa
+        latest_semester = max(self.student_semesters, key=lambda semester: semester.semester or 0)
+        return latest_semester.cgpa if latest_semester.cgpa is not None else self.sgpa
 
 
 class StudentSemester(Base):
     __tablename__ = "student_semesters"
 
     id = Column(Integer, primary_key=True, index=True)
-    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True)
-    dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True)
-    semester = Column(Integer, nullable=False)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    dataset_id = Column(Integer, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False)
+    semester = Column(Integer, nullable=False, default=1)
     sgpa = Column(Float, nullable=False)
     cgpa = Column(Float, nullable=False)
 
@@ -75,9 +71,11 @@ class Result(Base):
     __tablename__ = "results"
 
     id = Column(Integer, primary_key=True, index=True)
-    student_semester_id = Column(Integer, ForeignKey("student_semesters.id", ondelete="CASCADE"), nullable=False)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False)
+    student_semester_id = Column(Integer, ForeignKey("student_semesters.id", ondelete="CASCADE"), nullable=True)
     subject = Column(String(255), nullable=False)
     grade = Column(String(32), nullable=False)
     gp = Column(Float, nullable=True)
 
+    student = relationship("Student", back_populates="results")
     student_semester = relationship("StudentSemester", back_populates="results")
